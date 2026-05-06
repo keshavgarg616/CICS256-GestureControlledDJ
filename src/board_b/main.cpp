@@ -1,0 +1,44 @@
+#include <Arduino.h>
+#define NUM_SENSORS 7
+
+const int trigPins[NUM_SENSORS] = {32, 25, 27, 12, 5, 19, 22};
+const int echoPins[NUM_SENSORS] = {33, 26, 14, 13, 23, 21, 4};
+long distances[NUM_SENSORS];
+
+void setup()
+{
+    Serial.begin(115200);                      // For PC debugging
+    Serial2.begin(115200, SERIAL_8N1, 16, 17); // Communication to ESP32 A
+
+    for (int i = 0; i < NUM_SENSORS; i++)
+    {
+        pinMode(trigPins[i], OUTPUT);
+        pinMode(echoPins[i], INPUT);
+    }
+}
+
+void loop()
+{
+    String payload = "";
+
+    for (int i = 0; i < NUM_SENSORS; i++)
+    {
+        digitalWrite(trigPins[i], LOW);
+        delayMicroseconds(2);
+        digitalWrite(trigPins[i], HIGH);
+        delayMicroseconds(10);
+        digitalWrite(trigPins[i], LOW);
+
+        // 30,000us timeout (~5 meters) so a bad wire doesn't block the loop
+        long duration = pulseIn(echoPins[i], HIGH, 30000);
+        distances[i] = (duration == 0) ? -1 : duration * 0.034 / 2; // -1 means out of range/error
+
+        payload += String(distances[i]);
+        if (i < NUM_SENSORS - 1)
+            payload += ",";
+    }
+
+    Serial2.println(payload);           // Send to Main ESP32
+    Serial.println("Sent: " + payload); // Debug to PC
+    delay(100);                         // 10Hz update rate
+}
