@@ -22,6 +22,14 @@ CRGB ring2Leds[NUM_RING_LEDS];
 #define SERVO_PIN 18
 #define BUTTON_PIN 5
 
+// --- Serial Protocol Thresholds ---
+#define POT_THRESHOLD 2        // min change in 0-127 to trigger send
+#define TOUCH_THRESHOLD 30     // touchRead threshold
+#define DRUM_DISTANCE_CM 30    // distance below which = drum hit
+#define DRUM_COOLDOWN_MS 200   // per-sensor cooldown
+#define BUTTON_DEBOUNCE_MS 50  // button debounce
+#define NUM_ULTRA_SENSORS 7    // ultrasonic sensors on Board B
+
 // Now 7 Piano Keys
 const int NUM_PIANO_KEYS = 7;
 const int PIANO_PINS[NUM_PIANO_KEYS] = {4, 13, 15, 27, 32, 33, 14}; // Added 14
@@ -34,6 +42,56 @@ paj7620 Gesture;
 String latestUltrasonicData = "Waiting...";
 String lastGesture = "None";
 String lastPianoKey = "None";
+
+// --- Serial Protocol State ---
+int lastSentVolume = -1;
+int lastSentPitch = -1;
+bool lastButtonState = HIGH;
+unsigned long lastButtonTime = 0;
+bool keyWasPressed[NUM_PIANO_KEYS] = {};
+long ultraDist[NUM_ULTRA_SENSORS] = {-1, -1, -1, -1, -1, -1, -1};
+bool drumWasClose[NUM_ULTRA_SENSORS] = {};
+unsigned long drumCooldownEnd[NUM_ULTRA_SENSORS] = {};
+
+// --- Serial Protocol Helpers ---
+void sendCmd(const String &msg)
+{
+  Serial.println(msg);
+}
+
+void sendDebug(const String &msg)
+{
+  Serial.println("DEBUG," + msg);
+}
+
+void parseUltrasonicPayload(const String &raw, long out[], int count)
+{
+  for (int i = 0; i < count; i++) out[i] = -1;
+  int start = 0;
+  for (int i = 0; i < count; i++)
+  {
+    int comma = raw.indexOf(',', start);
+    String token = (comma == -1) ? raw.substring(start) : raw.substring(start, comma);
+    out[i] = token.toInt();
+    if (comma == -1) break;
+    start = comma + 1;
+  }
+}
+
+void checkDrumHits()
+{
+  unsigned long now = millis();
+  for (int i = 0; i < NUM_ULTRA_SENSORS; i++)
+  {
+    bool isClose = (ultraDist[i] > 0 && ultraDist[i] < DRUM_DISTANCE_CM);
+    if (isClose && !drumWasClose[i] && now >= drumCooldownEnd[i])
+    {
+      sendCmd("DRUM," + String(i + 1) + "," + String(ultraDist[i]));
+      drumCooldownEnd[i] = now + DRUM_COOLDOWN_MS;
+    }
+    drumWasClose[i] = isClose;
+  }
+}
 
 void setup()
 {
@@ -56,7 +114,7 @@ void setup()
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
   {
-    Serial.println("OLED init failed!");
+    sendDebug("OLED init failed!");
   }
   display.clearDisplay();
   display.setTextSize(1);
@@ -69,12 +127,12 @@ void setup()
   // 4. Init Gesture Sensor
   if (!Gesture.init())
   {
-    Serial.println("Gesture sensor init failed!");
+    sendDebug("Gesture sensor init failed!");
     display.println("Gesture: FAILED");
   }
   else
   {
-    Serial.println("Gesture sensor ready.");
+    sendDebug("Gesture sensor ready.");
     display.println("Gesture: OK");
   }
   display.display();
@@ -87,7 +145,9 @@ void loop()
   if (Serial2.available())
   {
     latestUltrasonicData = Serial2.readStringUntil('\n');
-    Serial.println("Ultrasonics: " + latestUltrasonicData);
+    sendDebug("Ultrasonics: " + latestUltrasonicData);
+    parseUltrasonicPayload(latestUltrasonicData, ultraDist, NUM_ULTRA_SENSORS);
+    checkDrumHits();
   }
 
   // --- B. Read Analog Inputs & Actuate ---
@@ -100,6 +160,20 @@ void loop()
   int ledBrightness = map(pot2, 0, 4095, 0, 255);
   FastLED.setBrightness(ledBrightness);
 
+  // Send pot values to laptop (normalized 0-127)
+  int volume = map(pot1, 0, 4095, 0, 127);
+  int pitch = map(pot2, 0, 4095, 0, 127);
+  if (lastSentVolume < 0 || abs(volume - lastSentVolume) >= POT_THRESHOLD)
+  {
+    sendCmd("POT,VOLUME," + String(volume));
+    lastSentVolume = volume;
+  }
+  if (lastSentPitch < 0 || abs(pitch - lastSentPitch) >= POT_THRESHOLD)
+  {
+    sendCmd("POT,PITCH," + String(pitch));
+    lastSentPitch = pitch;
+  }
+
   // Update all 3 NeoPixel strands
   uint8_t colorIndex = (millis() / 1000) % 3;
   CRGB testColor = (colorIndex == 0) ? CRGB::Red : (colorIndex == 1) ? CRGB::Green
@@ -110,55 +184,91 @@ void loop()
   FastLED.show();
 
   // --- C. Read Digital Button ---
-  bool buttonPressed = (digitalRead(BUTTON_PIN) == LOW);
+  bool buttonState = digitalRead(BUTTON_PIN);
+  bool buttonPressed = (buttonState == LOW);
+  unsigned long now = millis();
+  if (buttonState == LOW && lastButtonState == HIGH && (now - lastButtonTime) > BUTTON_DEBOUNCE_MS)
+  {
+    sendCmd("BTN,PLAY_PAUSE");
+    lastButtonTime = now;
+  }
+  lastButtonState = buttonState;
 
   // --- D. Read 7 Touch Piano Keys ---
+  bool anyKeyPressed = false;
   for (int i = 0; i < NUM_PIANO_KEYS; i++)
   {
-    if (touchRead(PIANO_PINS[i]) < 30)
+    bool pressed = (touchRead(PIANO_PINS[i]) < TOUCH_THRESHOLD);
+    if (pressed && !keyWasPressed[i])
     {
       lastPianoKey = String(i + 1);
+      sendCmd("KEY," + String(i + 1));
     }
+    if (pressed) anyKeyPressed = true;
+    keyWasPressed[i] = pressed;
   }
+  if (!anyKeyPressed) lastPianoKey = "None";
 
   // --- E. Read All 9 Gestures ---
   paj7620_gesture_t result;
   if (Gesture.getResult(result))
   {
+    String gestureName;
+    String effectName;
     switch (result)
     {
     case UP:
       lastGesture = "Up";
+      gestureName = "UP";
+      effectName = "REVERB_UP";
       break;
     case DOWN:
       lastGesture = "Down";
+      gestureName = "DOWN";
+      effectName = "REVERB_DOWN";
       break;
     case LEFT:
       lastGesture = "Left";
+      gestureName = "LEFT";
+      effectName = "LOWPASS_ON";
       break;
     case RIGHT:
       lastGesture = "Right";
+      gestureName = "RIGHT";
+      effectName = "LOWPASS_OFF";
       break;
     case PUSH:
       lastGesture = "Forward";
+      gestureName = "FORWARD";
       break;
     case POLL:
       lastGesture = "Backward";
+      gestureName = "BACKWARD";
       break;
     case CLOCKWISE:
       lastGesture = "Clockwise";
+      gestureName = "CLOCKWISE";
       break;
     case ANTI_CLOCKWISE:
       lastGesture = "Counter-Clockwise";
+      gestureName = "COUNTER_CLOCKWISE";
       break;
     case WAVE:
       lastGesture = "Wave";
+      gestureName = "WAVE";
+      effectName = "STUTTER";
       break;
     default:
       lastGesture = "Unknown";
+      gestureName = "UNKNOWN";
       break;
     }
-    Serial.println("Gesture Detected: " + lastGesture);
+    sendCmd("GESTURE," + gestureName);
+    if (effectName.length() > 0)
+    {
+      sendCmd("EFFECT," + effectName);
+    }
+    sendDebug("Gesture Detected: " + lastGesture);
   }
 
   // --- F. Update OLED Dashboard ---
