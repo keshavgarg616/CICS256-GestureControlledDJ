@@ -248,22 +248,22 @@ void loop()
     String effectName;
     switch (result)
     {
-    case RIGHT:
+    case UP:
       lastGesture = "Up";
       gestureName = "UP";
       effectName = "REVERB_UP";
       break;
-    case LEFT:
+    case DOWN:
       lastGesture = "Down";
       gestureName = "DOWN";
       effectName = "REVERB_DOWN";
       break;
-    case UP:
+    case LEFT:
       lastGesture = "Left";
       gestureName = "LEFT";
       effectName = "LOWPASS_ON";
       break;
-    case DOWN:
+    case RIGHT:
       lastGesture = "Right";
       gestureName = "RIGHT";
       effectName = "LOWPASS_OFF";
