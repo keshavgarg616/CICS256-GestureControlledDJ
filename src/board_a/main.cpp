@@ -43,6 +43,20 @@ String latestUltrasonicData = "Waiting...";
 String lastGesture = "None";
 String lastPianoKey = "None";
 
+// --- Drum Sensor Enable (sensor 5 disabled — used by servo) ---
+const bool DRUM_SENSOR_ENABLED[NUM_ULTRA_SENSORS] = {
+    true, true, true, true, false, true, true};
+
+// --- Drum Flash State ---
+unsigned long drumFlashUntil = 0;
+CRGB drumFlashColor = CRGB::Black;
+const unsigned long DRUM_FLASH_MS = 120;
+
+// Per-sensor flash colors
+const CRGB DRUM_COLORS[NUM_ULTRA_SENSORS] = {
+    CRGB::Red, CRGB::Orange, CRGB::Yellow, CRGB::Green,
+    CRGB::Black, CRGB::Blue, CRGB::Purple};
+
 // --- Serial Protocol State ---
 int lastSentVolume = -1;
 int lastSentPitch = -1;
@@ -80,15 +94,27 @@ void parseUltrasonicPayload(const String &raw, long out[], int count)
   }
 }
 
+void triggerDrumFlash(int sensorIndex)
+{
+  drumFlashColor = DRUM_COLORS[sensorIndex];
+  drumFlashUntil = millis() + DRUM_FLASH_MS;
+}
+
 void checkDrumHits()
 {
   unsigned long now = millis();
   for (int i = 0; i < NUM_ULTRA_SENSORS; i++)
   {
+    if (!DRUM_SENSOR_ENABLED[i])
+    {
+      drumWasClose[i] = false;
+      continue;
+    }
     bool isClose = (ultraDist[i] > 0 && ultraDist[i] < DRUM_DISTANCE_CM);
     if (isClose && !drumWasClose[i] && now >= drumCooldownEnd[i])
     {
       sendCmd("DRUM," + String(i + 1) + "," + String(ultraDist[i]));
+      triggerDrumFlash(i);
       drumCooldownEnd[i] = now + DRUM_COOLDOWN_MS;
     }
     drumWasClose[i] = isClose;
@@ -184,25 +210,34 @@ void loop()
   }
   lastButtonState = buttonState;
 
-  // --- Update all 3 NeoPixel strands ---
+  // --- Update NeoPixels ---
   static int savedBrightness = 40;
   static int lastBreatheSpeedVal = 0;
-  static int lastBrightessVal = 0;
+  static int lastBrightnessVal = 0;
   if (buttonPressed)
   {
     // Potentiometer controls brightness directly and saves it
-    int brightnessVal = pot2; // 0 to 255
-    if (brightnessVal - lastBrightessVal > 20 || brightnessVal - lastBrightessVal < -20)
+    int brightnessVal = pot2; // raw ADC value: 0 to 4095
+    if (brightnessVal - lastBrightnessVal > 20 || brightnessVal - lastBrightnessVal < -20)
     {
-      lastBrightessVal = brightnessVal;
+      lastBrightnessVal = brightnessVal;
     }
-    savedBrightness = map(lastBrightessVal, 0, 4095, 255, 0);
+    savedBrightness = map(lastBrightnessVal, 0, 4095, 255, 0);
     FastLED.setBrightness(savedBrightness);
 
     uint8_t currentHue = millis() / 20;
-    fill_solid(stripLeds, NUM_STRIP_LEDS, CHSV(currentHue, 255, 255));
+    // Rings: hue cycling
     fill_solid(ring1Leds, NUM_RING_LEDS, CHSV(currentHue, 255, 255));
     fill_solid(ring2Leds, NUM_RING_LEDS, CHSV(currentHue, 255, 255));
+    // Strip: drum flash override or hue cycling
+    if (millis() < drumFlashUntil)
+    {
+      fill_solid(stripLeds, NUM_STRIP_LEDS, drumFlashColor);
+    }
+    else
+    {
+      fill_solid(stripLeds, NUM_STRIP_LEDS, CHSV(currentHue, 255, 255));
+    }
   }
   else
   {
@@ -217,9 +252,18 @@ void loop()
     uint8_t breathValue = beatsin8(bpm, 10, 255);
 
     uint8_t currentHue = millis() / 20;
-    fill_solid(stripLeds, NUM_STRIP_LEDS, CHSV(currentHue, 255, breathValue));
+    // Rings: breathing
     fill_solid(ring1Leds, NUM_RING_LEDS, CHSV(currentHue, 255, breathValue));
     fill_solid(ring2Leds, NUM_RING_LEDS, CHSV(currentHue, 255, breathValue));
+    // Strip: drum flash override or breathing
+    if (millis() < drumFlashUntil)
+    {
+      fill_solid(stripLeds, NUM_STRIP_LEDS, drumFlashColor);
+    }
+    else
+    {
+      fill_solid(stripLeds, NUM_STRIP_LEDS, CHSV(currentHue, 255, breathValue));
+    }
   }
   FastLED.show();
 
