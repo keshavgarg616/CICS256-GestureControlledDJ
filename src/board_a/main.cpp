@@ -182,8 +182,36 @@ void loop()
   int pot1 = analogRead(POT1_PIN);
   int pot2 = analogRead(POT2_PIN);
 
-  int servoAngle = map(pot1, 0, 4095, 0, 180);
-  myServo.write(servoAngle);
+  // Servo sweep logic
+  static unsigned long lastServoStepTime = 0;
+  static int servoStepIndex = 0;
+  int sweepDelayMs = map(pot2, 4095, 0, 1000, 150); // Slower -> Faster (controlled by pot2)
+
+  if (millis() - lastServoStepTime >= sweepDelayMs)
+  {
+    lastServoStepTime = millis();
+
+    // Evaluate distance for the current step BEFORE moving to the next
+    long dist = ultraDist[4]; // Sensor 5
+    if (dist >= 10 && dist <= 30)
+    {
+      int drum_id = map(dist, 10, 30, 1, 6);
+      sendCmd("DRUM," + String(drum_id) + "," + String(dist));
+      triggerDrumFlash(4);
+    }
+
+    servoStepIndex++;
+    if (servoStepIndex > 6)
+    {
+      servoStepIndex = 0;
+      lastServoStepTime += 300; // Extra time for the 30->150 snap back
+    }
+
+    int currentAngle = 165 - servoStepIndex * 22; // 150, 126, 102, 78, 54, 30
+    myServo.write(currentAngle);
+  }
+
+  int servoAngle = 150 - servoStepIndex * 24; // for OLED display
 
   // Send pot values to laptop (normalized 0-127)
   int volume = map(pot1, 0, 4095, 0, 127);
