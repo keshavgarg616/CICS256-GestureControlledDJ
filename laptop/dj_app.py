@@ -9,8 +9,8 @@ Enhancements:
   - Drums & piano overlay cleanly on top of any background soundtrack
   - POT 1 = Volume, POT 2 = LED brightness (sent back over serial)
   - PLAY_PAUSE button toggles background song
-  - Gesture effects: LEFT/RIGHT = filter sweep, UP = pitch-rise stutter,
-                     DOWN = reverse echo, CIRCLE = vinyl scratch spin,
+  - Gesture effects: LEFT = Trance Gate, RIGHT = EDM Build-up, UP = Machine Gun,
+                     DOWN = Tape Stop, CIRCLE = vinyl scratch spin,
                      WAVE = tremolo shimmer
 """
 
@@ -305,8 +305,8 @@ def _gesture_effect(gesture: str) -> None:
 
       LEFT  → filter sweep DOWN  (volume dip + gradual restore simulates LPF sweep)
       RIGHT → filter sweep UP    (stutter-rise: rapid volume bumps climbing back)
-      UP    → pitch-rise stutter (rapid note re-triggers on ascending keys)
-      DOWN  → reverse echo       (play notes in reverse order, decaying)
+      UP    → distortion / overdrive clip
+      DOWN  → low-pass hold
       CIRCLE→ vinyl scratch spin  (rapid volume wobble, pitch-shift illusion)
       WAVE  → tremolo shimmer    (sine-wave amplitude modulation, 8 Hz)
     """
@@ -318,59 +318,56 @@ def _gesture_effect(gesture: str) -> None:
 
     base_vol = state["volume"] / 127.0
 
-    def sweep_down():
+    def trance_gate():
         state["gesture_busy"] = True
-        print("[fx] ◀  Filter sweep DOWN  ↓↓↓")
-        steps = 20
-        for i in range(steps):
-            v = base_vol * (1 - i / steps) ** 2
-            pygame.mixer.music.set_volume(v)
-            time.sleep(0.03)
-        for i in range(steps):
-            v = base_vol * ((i + 1) / steps) ** 2
-            pygame.mixer.music.set_volume(v)
-            time.sleep(0.03)
-        pygame.mixer.music.set_volume(base_vol)
-        state["gesture_busy"] = False
-
-    def sweep_up():
-        state["gesture_busy"] = True
-        print("[fx] ▶  Filter sweep UP  ↑↑↑")
+        print("[fx] ◀  Trance Gate  (L/R)")
+        # Rhythmic on/off volume
         steps = 16
         for i in range(steps):
-            frac = i / steps
-            # stutter: brief silence then bump
-            pygame.mixer.music.set_volume(0.0)
-            time.sleep(0.015)
-            pygame.mixer.music.set_volume(base_vol * frac)
-            time.sleep(0.025)
+            pygame.mixer.music.set_volume(base_vol if i % 2 == 0 else 0.0)
+            time.sleep(0.12)
         pygame.mixer.music.set_volume(base_vol)
         state["gesture_busy"] = False
 
-    def pitch_rise_stutter():
+    def edm_build_up():
         state["gesture_busy"] = True
-        print("[fx] ▲  Pitch-rise stutter  ↑↑↑")
-        # Rapidly retrigger piano notes ascending then descending
-        pattern = [1, 2, 3, 4, 5, 6, 7, 6, 5, 4]
-        for k in pattern:
-            sound = loaded_notes.get(str(k))
-            if sound:
-                sound.set_volume(base_vol * 0.6)
-                sound.play()
-            time.sleep(0.07)
+        print("[fx] ▶  EDM Build-up")
+        # Volume stutter getting progressively faster
+        for i in range(1, 15):
+            delay = max(0.015, 0.2 - (i * 0.012))
+            pygame.mixer.music.set_volume(base_vol)
+            time.sleep(delay)
+            pygame.mixer.music.set_volume(0.0)
+            time.sleep(delay / 2.0)
+        pygame.mixer.music.set_volume(base_vol)
         state["gesture_busy"] = False
 
-    def reverse_echo():
+    def machine_gun():
         state["gesture_busy"] = True
-        print("[fx] ▼  Reverse echo  ↓↓↓")
-        # Play notes high→low with decaying volume
-        for k in range(7, 0, -1):
-            sound = loaded_notes.get(str(k))
-            decay = (8 - k) / 7.0
-            if sound:
-                sound.set_volume(base_vol * decay * 0.5)
-                sound.play()
-            time.sleep(0.12)
+        print("[fx] ▲  Machine Gun Stutter")
+        # Extremely rapid, hard-chopped stutter
+        steps = 30
+        for _ in range(steps):
+            pygame.mixer.music.set_volume(base_vol)
+            time.sleep(0.02)
+            pygame.mixer.music.set_volume(0.0)
+            time.sleep(0.02)
+        pygame.mixer.music.set_volume(base_vol)
+        state["gesture_busy"] = False
+
+    def tape_stop():
+        state["gesture_busy"] = True
+        print("[fx] ▼  Tape Stop Simulate")
+        # Rapid fade out, brief pause, snap back (closest we can get without modifying pitch)
+        steps = 15
+        for i in range(steps):
+            pygame.mixer.music.set_volume(base_vol * (1.0 - (i / steps) ** 0.5))
+            time.sleep(0.04)
+
+        pygame.mixer.music.set_volume(0.0)
+        time.sleep(0.5)
+
+        pygame.mixer.music.set_volume(base_vol)
         state["gesture_busy"] = False
 
     def vinyl_scratch():
@@ -403,10 +400,10 @@ def _gesture_effect(gesture: str) -> None:
         state["gesture_busy"] = False
 
     dispatch = {
-        "LEFT": sweep_down,
-        "RIGHT": sweep_up,
-        "UP": pitch_rise_stutter,
-        "DOWN": reverse_echo,
+        "LEFT": trance_gate,
+        "RIGHT": edm_build_up,
+        "UP": machine_gun,
+        "DOWN": tape_stop,
         "CIRCLE": vinyl_scratch,
         "WAVE": tremolo,
     }
